@@ -1,11 +1,11 @@
 import sys
 import logging
 from pyspark.context import SparkContext
+from pyspark.sql import functions as F
+from pyspark.sql.types import IntegerType, DoubleType, StringType
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
-from pyspark.sql import functions as F
-from pyspark.sql.types import IntegerType, DoubleType
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -20,12 +20,12 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+args = getResolvedOptions(sys.argv, ["JOB_NAME", "BUCKET_NAME"])
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 # ─── Configurações ──────────────────────────────────────────────────────────
-BUCKET_NAME = "ifood-case-data-lake-kaique"
+BUCKET_NAME = args["BUCKET_NAME"]
 DATABASE_BRONZE = "ifood_case_bronze"
 
 TABELAS = {
@@ -33,11 +33,13 @@ TABELAS = {
         "destino": "table_yellow_taxi_silver",
         "pickup": "tpep_pickup_datetime",
         "dropoff": "tpep_dropoff_datetime",
+        "taxi_type": "yellow",
     },
     "table_green_taxi_bronze": {
         "destino": "table_green_taxi_silver",
         "pickup": "lpep_pickup_datetime",
         "dropoff": "lpep_dropoff_datetime",
+        "taxi_type": "green",
     },
 }
 
@@ -66,28 +68,30 @@ def extract(tabela: str):
 
 
 # ─── Transform ──────────────────────────────────────────────────────────────
-def transform(df, tabela: str, pickup: str, dropoff: str):
+def transform(df, tabela: str, pickup: str, dropoff: str, taxi_type: str):
     logger.info("Iniciando transform | tabela=%s", tabela)
 
-    # 1. Seleciona, renomeia e converte tipagem
-    # Reutiliza partições do Bronze — mantém consistência entre camadas
     df = df.select(
         F.col("vendorid").cast(IntegerType()).alias("vendor_id"),
         F.col("passenger_count").cast(IntegerType()).alias("passenger_count"),
         F.col("total_amount").cast(DoubleType()).alias("total_amount"),
         F.col(pickup).cast("timestamp").alias("pickup_datetime"),
         F.col(dropoff).cast("timestamp").alias("dropoff_datetime"),
+        F.lit(taxi_type).cast(StringType()).alias("taxi_type"),
         F.col("partition_year").cast(IntegerType()).alias("partition_year"),
         F.col("partition_month").cast(IntegerType()).alias("partition_month"),
     )
     logger.info("Colunas selecionadas, renomeadas e tipadas | tabela=%s", tabela)
 
-    # 2. Remove nulos nas colunas obrigatórias
     df = df.dropna(subset=COLUNAS_OBRIGATORIAS)
     logger.info("Nulos removidos | tabela=%s", tabela)
 
     total = df.count()
-    logger.info("Transform concluido | tabela=%s | registros=%s", tabela, f"{total:,}")
+    logger.info(
+        "Transform concluido | tabela=%s | registros=%s",
+        tabela,
+        f"{total:,}",
+    )
 
     return df
 
@@ -114,7 +118,13 @@ def run():
         logger.info("Processando | tabela=%s", tabela)
         try:
             df = extract(tabela)
-            df = transform(df, tabela, config["pickup"], config["dropoff"])
+            df = transform(
+                df,
+                tabela,
+                config["pickup"],
+                config["dropoff"],
+                config["taxi_type"],
+            )
             load(df, config["destino"])
             sucessos += 1
         except (ValueError, OSError) as e:

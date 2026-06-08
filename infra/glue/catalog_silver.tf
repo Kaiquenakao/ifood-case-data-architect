@@ -154,7 +154,7 @@ resource "null_resource" "repair_silver_yellow" {
 
   provisioner "local-exec" {
     interpreter = ["PowerShell", "-Command"]
-    command     = "aws athena start-query-execution --query-string \"MSCK REPAIR TABLE ifood_case_silver.table_yellow_taxi_silver\" --result-configuration OutputLocation=s3://${var.bucket_name}/athena-results/"
+    command     = "aws athena start-query-execution --region ${var.aws_region} --query-string \"MSCK REPAIR TABLE ifood_case_silver.table_yellow_taxi_silver\" --result-configuration OutputLocation=s3://${var.bucket_name}/athena-results/"
   }
 }
 
@@ -163,6 +163,6 @@ resource "null_resource" "repair_silver_green" {
 
   provisioner "local-exec" {
     interpreter = ["PowerShell", "-Command"]
-    command     = "aws athena start-query-execution --query-string \"MSCK REPAIR TABLE ifood_case_silver.table_green_taxi_silver\" --result-configuration OutputLocation=s3://${var.bucket_name}/athena-results/"
+    command     = "aws athena start-query-execution --region ${var.aws_region} --query-string \"MSCK REPAIR TABLE ifood_case_silver.table_green_taxi_silver\" --result-configuration OutputLocation=s3://${var.bucket_name}/athena-results/"
   }
 }

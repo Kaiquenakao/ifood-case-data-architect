@@ -23,12 +23,12 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+args = getResolvedOptions(sys.argv, ["JOB_NAME", "BUCKET_NAME"])
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 # ─── Configurações ──────────────────────────────────────────────────────────
-BUCKET_NAME = "ifood-case-data-lake-kaique"
+BUCKET_NAME = args["BUCKET_NAME"]
 BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 REQUEST_TIMEOUT = 120
 MESES = ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05"]
@@ -148,8 +148,7 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
                 df[col] = df[col].astype(dtype)
             except (ValueError, TypeError) as e:
                 logger.warning(
-                    "Falha ao converter coluna | tabela=%s | mes=%s | "
-                    "coluna=%s | dtype=%s | erro=%s",
+                    "Falha converter | tabela=%s | mes=%s | col=%s | dtype=%s | erro=%s",
                     tabela,
                     mes,
                     col,
