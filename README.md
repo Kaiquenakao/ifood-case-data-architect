@@ -186,9 +186,9 @@ aws glue start-crawler --name ifood-case-prod-crawler-bronze-yellow-taxi --regio
 aws glue start-crawler --name ifood-case-prod-crawler-bronze-green-taxi --region sua-regiao
 ```
 
-Aguarde os Crawlers finalizarem e registre as partições no Athena. Registre as partições no Athena — execute **uma query por vez**:
-
 ![Crawler](doc/crawler.png)
+
+Aguarde os Crawlers finalizarem e registre as partições no Athena. Registre as partições no Athena — execute **uma query por vez**:
 
 ```sql
 MSCK REPAIR TABLE ifood_case_bronze.table_yellow_taxi_bronze;
