@@ -97,6 +97,13 @@ Athena     ← consulta SQL para usuários finais
 
 ---
 
+### Catálogo de Dados e Metadados
+
+Todos os metadados, definições de schemas e partições das tabelas descritas acima estão centralizados no **AWS Glue Data Catalog**. 
+![Glue Data Catalog](doc/glue_data_catalog.png)
+
+---
+
 ## Pré-requisitos
 
 - [Terraform](https://developer.hashicorp.com/terraform/downloads) >= 1.5.0
