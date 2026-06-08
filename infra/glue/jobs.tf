@@ -1,6 +1,3 @@
-# ─── IAM Role para os Glue Jobs ─────────────────────────────────────────────
-# Reutiliza a role do Crawler adicionando permissões de escrita no S3
-
 # ─── Glue Job — ETL Bronze ──────────────────────────────────────────────────
 resource "aws_glue_job" "etl_bronze" {
   name         = "${local.prefix}-etl-bronze"
@@ -20,6 +17,7 @@ resource "aws_glue_job" "etl_bronze" {
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-metrics"                   = "true"
     "--TempDir"                          = "s3://${var.bucket_name}/temp/"
+    "--BUCKET_NAME"                      = var.bucket_name
   }
 
   execution_property {
@@ -48,6 +46,7 @@ resource "aws_glue_job" "etl_silver" {
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-metrics"                   = "true"
     "--TempDir"                          = "s3://${var.bucket_name}/temp/"
+    "--BUCKET_NAME"                      = var.bucket_name
   }
 
   execution_property {
@@ -76,6 +75,7 @@ resource "aws_glue_job" "etl_gold" {
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-metrics"                   = "true"
     "--TempDir"                          = "s3://${var.bucket_name}/temp/"
+    "--BUCKET_NAME"                      = var.bucket_name
   }
 
   execution_property {

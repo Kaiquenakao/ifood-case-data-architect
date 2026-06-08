@@ -20,12 +20,12 @@ sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 
-args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+args = getResolvedOptions(sys.argv, ["JOB_NAME", "BUCKET_NAME"])
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
 # ─── Configurações ──────────────────────────────────────────────────────────
-BUCKET_NAME = "ifood-case-data-lake-kaique"
+BUCKET_NAME = args["BUCKET_NAME"]
 DATABASE_SILVER = "ifood_case_silver"
 ANO = 2023
 MES_INICIO = 1
@@ -52,11 +52,9 @@ def extract(tabela: str):
 def transform_all_taxi(df_yellow, df_green):
     logger.info("Iniciando transform | tabela=table_all_taxi_gold")
 
-    # UNION ALL Yellow + Green
     df_union = df_yellow.unionByName(df_green)
     logger.info("UNION ALL concluido")
 
-    # Renomeia colunas para atender o enunciado
     df = df_union.select(
         F.col("vendor_id").cast(IntegerType()).alias("VendorID"),
         F.col("passenger_count").cast(IntegerType()).alias("passenger_count"),
@@ -71,7 +69,6 @@ def transform_all_taxi(df_yellow, df_green):
         "Colunas renomeadas | vendor_id->VendorID | pickup/dropoff_datetime->tpep_*"
     )
 
-    # Filtros de negócio
     df = (
         df.filter(F.year(F.col("tpep_pickup_datetime")) == ANO)
         .filter(F.month(F.col("tpep_pickup_datetime")).between(MES_INICIO, MES_FIM))
@@ -99,7 +96,6 @@ def transform_all_taxi(df_yellow, df_green):
 def transform_query1(df_gold):
     logger.info("Iniciando transform | tabela=table_avg_total_amount_gold")
 
-    # Query 1 — média de total_amount por mês considerando apenas yellow taxi
     df = (
         df_gold.filter(F.col("taxi_type") == "yellow")
         .groupBy(F.month(F.col("tpep_pickup_datetime")).alias("mes"))
@@ -116,7 +112,6 @@ def transform_query1(df_gold):
 def transform_query2(df_gold):
     logger.info("Iniciando transform | tabela=table_avg_passengers_gold")
 
-    # Query 2 — média de passenger_count por hora em maio (yellow + green)
     df = (
         df_gold.filter(F.month(F.col("tpep_pickup_datetime")) == MES_MAIO)
         .withColumn("hora", F.hour(F.col("tpep_pickup_datetime")))
@@ -150,22 +145,18 @@ def run():
     logger.info("Iniciando pipeline Gold")
 
     try:
-        # 1. Extract do Silver
         df_yellow = extract("table_yellow_taxi_silver")
         df_green = extract("table_green_taxi_silver")
 
-        # 2. Transform + Load — table_all_taxi_gold
         logger.info("─" * 60)
         df_gold = transform_all_taxi(df_yellow, df_green)
         df_gold.cache()
         load(df_gold, "table_all_taxi_gold", partition=True)
 
-        # 3. Transform + Load — Query 1
         logger.info("─" * 60)
         df_query1 = transform_query1(df_gold)
         load(df_query1, "table_avg_total_amount_gold", partition=False)
 
-        # 4. Transform + Load — Query 2
         logger.info("─" * 60)
         df_query2 = transform_query2(df_gold)
         load(df_query2, "table_avg_passengers_gold", partition=False)
