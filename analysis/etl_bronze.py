@@ -39,6 +39,57 @@ TABELAS = {
 
 s3_client = boto3.client("s3")
 
+# ─── Schemas explícitos por tabela ──────────────────────────────────────────
+SCHEMA_YELLOW = {
+    "vendorid": "Int64",
+    "tpep_pickup_datetime": "datetime64[us]",
+    "tpep_dropoff_datetime": "datetime64[us]",
+    "passenger_count": "float64",
+    "trip_distance": "float64",
+    "ratecodeid": "float64",
+    "store_and_fwd_flag": "object",
+    "pulocationid": "Int64",
+    "dolocationid": "Int64",
+    "payment_type": "Int64",
+    "fare_amount": "float64",
+    "extra": "float64",
+    "mta_tax": "float64",
+    "tip_amount": "float64",
+    "tolls_amount": "float64",
+    "improvement_surcharge": "float64",
+    "total_amount": "float64",
+    "congestion_surcharge": "float64",
+    "airport_fee": "float64",
+}
+
+SCHEMA_GREEN = {
+    "vendorid": "Int64",
+    "lpep_pickup_datetime": "datetime64[us]",
+    "lpep_dropoff_datetime": "datetime64[us]",
+    "store_and_fwd_flag": "object",
+    "ratecodeid": "float64",
+    "pulocationid": "Int64",
+    "dolocationid": "Int64",
+    "passenger_count": "float64",
+    "trip_distance": "float64",
+    "fare_amount": "float64",
+    "extra": "float64",
+    "mta_tax": "float64",
+    "tip_amount": "float64",
+    "tolls_amount": "float64",
+    "ehail_fee": "float64",
+    "improvement_surcharge": "float64",
+    "total_amount": "float64",
+    "payment_type": "float64",
+    "trip_type": "float64",
+    "congestion_surcharge": "float64",
+}
+
+SCHEMAS = {
+    "table_yellow_taxi": SCHEMA_YELLOW,
+    "table_green_taxi": SCHEMA_GREEN,
+}
+
 
 # ─── Extract ────────────────────────────────────────────────────────────────
 def extract(prefixo: str, mes: str) -> BytesIO:
@@ -65,7 +116,7 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
 
     df = pd.read_parquet(dados)
 
-    # Padroniza nomes de colunas para lowercase
+    # 1. Padroniza nomes de colunas para lowercase
     colunas_originais = df.columns.tolist()
     df.columns = [col.lower() for col in df.columns]
 
@@ -88,6 +139,23 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
             tabela,
             mes,
         )
+
+    # 2. Aplica schema explícito — garante tipagem consistente entre meses
+    schema = SCHEMAS[tabela]
+    for col, dtype in schema.items():
+        if col in df.columns:
+            try:
+                df[col] = df[col].astype(dtype)
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    "Falha ao converter coluna | tabela=%s | mes=%s | "
+                    "coluna=%s | dtype=%s | erro=%s",
+                    tabela,
+                    mes,
+                    col,
+                    dtype,
+                    e,
+                )
 
     logger.info(
         "Transform concluido | tabela=%s | mes=%s | colunas=%s | linhas=%s",
