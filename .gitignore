@@ -218,3 +218,6 @@ override.tf.json
 .terrafor*
 terraform.rc
 
+# Others
+
+Dockerfile
