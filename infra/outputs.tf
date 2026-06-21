@@ -27,3 +27,13 @@ output "glue_crawler_role_arn" {
   description = "ARN da Role do Glue Crawler"
   value       = module.iam.glue_crawler_role_arn
 }
+
+output "state_machine_arn" {
+  description = "ARN da Step Function pipeline NYC TLC"
+  value       = module.stepfunction.state_machine_arn
+}
+
+output "state_machine_name" {
+  description = "Nome da Step Function pipeline NYC TLC"
+  value       = module.stepfunction.state_machine_name
+}

@@ -28,3 +28,15 @@ module "glue" {
 
   depends_on = [module.s3]
 }
+
+module "stepfunction" {
+  source        = "./stepfunction"
+  project_name  = var.project_name
+  environment   = var.environment
+  aws_region    = var.aws_region
+  bucket_name   = var.bucket_name
+  glue_role_arn = module.iam.glue_crawler_role_arn
+  common_tags   = local.common_tags
+
+  depends_on = [module.glue]
+}
