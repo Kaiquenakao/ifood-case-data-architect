@@ -1,3 +1,23 @@
+"""Script responsável pela ingestão dos dados brutos do Green Taxi na camada Bronze do Data Lake.
+
+Este script realiza o download dos arquivos Parquet mensais do NYC TLC (Taxi & Limousine
+Commission), aplica padronização de colunas e tipagem explícita via schema, e persiste
+os dados particionados no S3 na camada Bronze.
+
+Os dados são extraídos diretamente da CDN pública do NYC TLC, transformados com pandas
+para garantir consistência de schema entre os meses, e carregados no S3 com particionamento
+por ano e mês.
+
+Uso:
+    Executado como AWS Glue Job com os argumentos:
+        --JOB_NAME    : Nome do job no Glue.
+        --BUCKET_NAME : Nome do bucket S3 de destino.
+
+Argumentos Glue:
+    JOB_NAME    : Injetado automaticamente pelo Glue.
+    BUCKET_NAME : Nome do bucket S3 onde os dados serão persistidos.
+"""
+
 import sys
 import logging
 from io import BytesIO
@@ -5,6 +25,7 @@ from io import BytesIO
 import boto3
 import pandas as pd
 import requests
+
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
@@ -16,53 +37,17 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     datefmt="%d-%m-%Y %H:%M:%S",
 )
-logger = logging.getLogger("etl_bronze")
-
-# ─── Inicializa contexto Glue e Spark ───────────────────────────────────────
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-
-args = getResolvedOptions(sys.argv, ["JOB_NAME", "BUCKET_NAME"])
-job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+logger = logging.getLogger("etl_green_taxi_bronze")
 
 # ─── Configurações ──────────────────────────────────────────────────────────
-BUCKET_NAME = args["BUCKET_NAME"]
 BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 REQUEST_TIMEOUT = 120
+PREFIXO = "green_tripdata"
+TABLE_NAME = "table_green_taxi_bronze"
 MESES = ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05"]
-TABELAS = {
-    "table_yellow_taxi": "yellow_tripdata",
-    "table_green_taxi": "green_tripdata",
-}
 
-s3_client = boto3.client("s3")
-
-# ─── Schemas explícitos por tabela ──────────────────────────────────────────
-SCHEMA_YELLOW = {
-    "vendorid": "Int64",
-    "tpep_pickup_datetime": "datetime64[us]",
-    "tpep_dropoff_datetime": "datetime64[us]",
-    "passenger_count": "float64",
-    "trip_distance": "float64",
-    "ratecodeid": "float64",
-    "store_and_fwd_flag": "object",
-    "pulocationid": "Int64",
-    "dolocationid": "Int64",
-    "payment_type": "Int64",
-    "fare_amount": "float64",
-    "extra": "float64",
-    "mta_tax": "float64",
-    "tip_amount": "float64",
-    "tolls_amount": "float64",
-    "improvement_surcharge": "float64",
-    "total_amount": "float64",
-    "congestion_surcharge": "float64",
-    "airport_fee": "float64",
-}
-
-SCHEMA_GREEN = {
+# ─── Schema explícito ────────────────────────────────────────────────────────
+SCHEMA = {
     "vendorid": "Int64",
     "lpep_pickup_datetime": "datetime64[us]",
     "lpep_dropoff_datetime": "datetime64[us]",
@@ -85,15 +70,21 @@ SCHEMA_GREEN = {
     "congestion_surcharge": "float64",
 }
 
-SCHEMAS = {
-    "table_yellow_taxi": SCHEMA_YELLOW,
-    "table_green_taxi": SCHEMA_GREEN,
-}
-
 
 # ─── Extract ────────────────────────────────────────────────────────────────
-def extract(prefixo: str, mes: str) -> BytesIO:
-    url = f"{BASE_URL}/{prefixo}_{mes}.parquet"
+def extract(mes: str) -> BytesIO:
+    """Realiza o download do arquivo Parquet mensal do Green Taxi a partir da CDN do NYC TLC.
+
+    Args:
+        mes: Mês de referência no formato 'AAAA-MM'.
+
+    Returns:
+        Buffer em memória com o conteúdo do arquivo Parquet baixado.
+
+    Raises:
+        requests.RequestException: Se o download falhar ou retornar status de erro.
+    """
+    url = f"{BASE_URL}/{PREFIXO}_{mes}.parquet"
     logger.info("Iniciando download | url=%s", url)
 
     response = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -107,12 +98,24 @@ def extract(prefixo: str, mes: str) -> BytesIO:
 
 
 # ─── Transform ──────────────────────────────────────────────────────────────
-def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
-    logger.info("Iniciando transform | tabela=%s | mes=%s", tabela, mes)
+def transform(dados: BytesIO, mes: str) -> BytesIO:
+    """Padroniza colunas para lowercase e aplica tipagem explícita via schema do Green Taxi.
+
+    Args:
+        dados: Buffer em memória com o arquivo Parquet bruto baixado pelo extract.
+        mes  : Mês de referência no formato 'AAAA-MM', usado nos logs.
+
+    Returns:
+        Buffer em memória com o Parquet transformado e pronto para carga no S3.
+
+    Raises:
+        ValueError: Se o arquivo estiver vazio.
+    """
+    logger.info("Iniciando transform | tabela=%s | mes=%s", TABLE_NAME, mes)
 
     if dados.getbuffer().nbytes == 0:
-        logger.error("Arquivo vazio | tabela=%s | mes=%s", tabela, mes)
-        raise ValueError(f"Arquivo vazio | tabela={tabela} | mes={mes}")
+        logger.error("Arquivo vazio | tabela=%s | mes=%s", TABLE_NAME, mes)
+        raise ValueError(f"Arquivo vazio | tabela={TABLE_NAME} | mes={mes}")
 
     df = pd.read_parquet(dados)
 
@@ -129,27 +132,26 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
     if colunas_renomeadas:
         logger.warning(
             "Colunas padronizadas para lowercase | tabela=%s | mes=%s | colunas=%s",
-            tabela,
+            TABLE_NAME,
             mes,
             colunas_renomeadas,
         )
     else:
         logger.info(
             "Nenhuma coluna precisou ser renomeada | tabela=%s | mes=%s",
-            tabela,
+            TABLE_NAME,
             mes,
         )
 
     # 2. Aplica schema explícito — garante tipagem consistente entre meses
-    schema = SCHEMAS[tabela]
-    for col, dtype in schema.items():
+    for col, dtype in SCHEMA.items():
         if col in df.columns:
             try:
                 df[col] = df[col].astype(dtype)
             except (ValueError, TypeError) as e:
                 logger.warning(
                     "Falha converter | tabela=%s | mes=%s | col=%s | dtype=%s | erro=%s",
-                    tabela,
+                    TABLE_NAME,
                     mes,
                     col,
                     dtype,
@@ -158,7 +160,7 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
 
     logger.info(
         "Transform concluido | tabela=%s | mes=%s | colunas=%s | linhas=%s",
-        tabela,
+        TABLE_NAME,
         mes,
         len(df.columns),
         f"{len(df):,}",
@@ -172,50 +174,69 @@ def transform(dados: BytesIO, tabela: str, mes: str) -> BytesIO:
 
 
 # ─── Load ───────────────────────────────────────────────────────────────────
-def load(dados: BytesIO, prefixo: str, tabela: str, mes: str):
+def load(dados: BytesIO, mes: str, bucket_name: str, s3_client):
+    """Persiste o arquivo Parquet transformado no S3 particionado por ano e mês.
+
+    Args:
+        dados      : Buffer em memória com o Parquet transformado.
+        mes        : Mês de referência no formato 'AAAA-MM'.
+        bucket_name: Nome do bucket S3 de destino.
+        s3_client  : Cliente boto3 S3.
+    """
     ano, month = mes.split("-")
     s3_key = (
-        f"bronze/{tabela}_bronze/"
+        f"bronze/{TABLE_NAME}/"
         f"partition_year={int(ano)}/partition_month={int(month)}/"
-        f"{prefixo}_{mes}.parquet"
+        f"{PREFIXO}_{mes}.parquet"
     )
 
-    logger.info("Iniciando carga | destino=s3://%s/%s", BUCKET_NAME, s3_key)
-    s3_client.upload_fileobj(dados, BUCKET_NAME, s3_key)
-    logger.info("Carga concluida | destino=s3://%s/%s", BUCKET_NAME, s3_key)
+    logger.info("Iniciando carga | destino=s3://%s/%s", bucket_name, s3_key)
+    s3_client.upload_fileobj(dados, bucket_name, s3_key)
+    logger.info("Carga concluida | destino=s3://%s/%s", bucket_name, s3_key)
 
 
 # ─── Pipeline ───────────────────────────────────────────────────────────────
 def run():
-    logger.info("Iniciando pipeline Bronze")
+    """Executa o pipeline completo para todos os meses: extract → transform → load."""
+    args = getResolvedOptions(sys.argv, ["JOB_NAME", "BUCKET_NAME"])
+    sc = SparkContext()
+    glue_context = GlueContext(sc)
+    job = Job(glue_context)
+    job.init(args["JOB_NAME"], args)
+
+    bucket_name = args["BUCKET_NAME"]
+    s3_client = boto3.client("s3")
+
+    logger.info("Iniciando pipeline | tabela=%s", TABLE_NAME)
     sucessos, falhas = 0, 0
 
-    for tabela, prefixo in TABELAS.items():
-        for mes in MESES:
-            logger.info("─" * 60)
-            logger.info("Processando | tabela=%s | mes=%s", tabela, mes)
-            try:
-                dados = extract(prefixo, mes)
-                dados = transform(dados, tabela, mes)
-                load(dados, prefixo, tabela, mes)
-                sucessos += 1
-            except (ValueError, requests.RequestException, OSError) as e:
-                logger.error(
-                    "Falha ao processar | tabela=%s | mes=%s | erro=%s",
-                    tabela,
-                    mes,
-                    e,
-                    exc_info=True,
-                )
-                falhas += 1
+    for mes in MESES:
+        logger.info("─" * 60)
+        logger.info("Processando | tabela=%s | mes=%s", TABLE_NAME, mes)
+        try:
+            dados = extract(mes)
+            dados = transform(dados, mes)
+            load(dados, mes, bucket_name, s3_client)
+            sucessos += 1
+        except (ValueError, requests.RequestException, OSError) as e:
+            logger.error(
+                "Falha ao processar | tabela=%s | mes=%s | erro=%s",
+                TABLE_NAME,
+                mes,
+                e,
+                exc_info=True,
+            )
+            falhas += 1
 
     logger.info("─" * 60)
     logger.info(
-        "Pipeline Bronze finalizado | sucessos=%s | falhas=%s",
+        "Pipeline finalizado | tabela=%s | sucessos=%s | falhas=%s",
+        TABLE_NAME,
         sucessos,
         falhas,
     )
+    job.commit()
 
 
-run()
-job.commit()
+if __name__ == "__main__":
+    run()
