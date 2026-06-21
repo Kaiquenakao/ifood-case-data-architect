@@ -134,7 +134,7 @@ class TestTransform:
 # ─── Load ───────────────────────────────────────────────────────────────────
 class TestLoad:
 
-    def test_load_calls_parquet_write(self, spark, df_bronze_yellow):  # adiciona spark
+    def test_load_calls_parquet_write(self, spark, df_bronze_yellow):
         mod.BUCKET_NAME = "mock-bucket"
         df = mod.transform(df_bronze_yellow)
 
@@ -142,14 +142,14 @@ class TestLoad:
         mock_writer.mode.return_value = mock_writer
         mock_writer.partitionBy.return_value = mock_writer
 
-        with patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)), \
-             patch.object(spark, "sql"):  # mocka o spark.sql
-            mod.load(df, spark)
+        with patch("boto3.client"), \
+             patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)):
+            mod.load(df)
 
         mock_writer.mode.assert_called_once_with("overwrite")
         mock_writer.partitionBy.assert_called_once_with("partition_year", "partition_month")
 
-    def test_load_s3_path_correct(self, spark, df_bronze_yellow):  # adiciona spark
+    def test_load_s3_path_correct(self, spark, df_bronze_yellow):
         mod.BUCKET_NAME = "mock-bucket"
         df = mod.transform(df_bronze_yellow)
         captured_path = {}
@@ -162,9 +162,9 @@ class TestLoad:
         mock_writer.partitionBy.return_value = mock_writer
         mock_writer.parquet.side_effect = fake_parquet
 
-        with patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)), \
-             patch.object(spark, "sql"):  # mocka o spark.sql
-            mod.load(df, spark)
+        with patch("boto3.client"), \
+             patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)):
+            mod.load(df)
 
-        assert "table_yellow_taxi_silver" in captured_path.get("path", "")  # ou green
+        assert "table_yellow_taxi_silver" in captured_path.get("path", "")
         assert "silver" in captured_path.get("path", "")

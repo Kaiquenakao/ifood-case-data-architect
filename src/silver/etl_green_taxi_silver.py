@@ -20,6 +20,8 @@ Argumentos Glue:
 import sys
 import logging
 
+import boto3
+
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
@@ -119,12 +121,11 @@ def transform(df):
 
 
 # ─── Load ───────────────────────────────────────────────────────────────────
-def load(df, spark):
+def load(df):
     """Persiste o DataFrame transformado no S3 particionado por ano e mês.
 
     Args:
         df: DataFrame Spark transformado pelo transform.
-        spark: Sessão Spark.
     """
     s3_path = f"s3://{BUCKET_NAME}/silver/{TABLE_SILVER}/"
     logger.info("Iniciando load | destino=%s", s3_path)
@@ -133,10 +134,17 @@ def load(df, spark):
         "partition_year", "partition_month"
     ).parquet(s3_path)
 
-    spark.sql(f"MSCK REPAIR TABLE ifood_case_silver.{TABLE_SILVER}")
-    logger.info("Partições registradas | tabela=%s", TABLE_SILVER)
-
     logger.info("Load concluido | destino=%s", s3_path)
+
+    # ─── Registra partições no Glue Catalog via Athena ──────────────────────
+    athena = boto3.client("athena")
+    athena.start_query_execution(
+        QueryString=f"MSCK REPAIR TABLE ifood_case_silver.{TABLE_SILVER}",
+        ResultConfiguration={
+            "OutputLocation": f"s3://{BUCKET_NAME}/athena-results/"
+        }
+    )
+    logger.info("MSCK REPAIR TABLE executado | tabela=%s", TABLE_SILVER)
 
 
 # ─── Pipeline ───────────────────────────────────────────────────────────────
@@ -157,7 +165,7 @@ def run():
     try:
         df = extract(glueContext)
         df = transform(df)
-        load(df, spark)
+        load(df)
         logger.info("Pipeline finalizado com sucesso | tabela=%s", TABLE_SILVER)
     except (ValueError, OSError) as e:
         logger.error(

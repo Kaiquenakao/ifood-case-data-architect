@@ -23,16 +23,6 @@ output "glue_database_gold" {
   value       = module.glue.database_gold_name
 }
 
-output "crawler_bronze_yellow_name" {
-  description = "Nome do Crawler Bronze Yellow Taxi"
-  value       = module.glue.crawler_bronze_yellow_name
-}
-
-output "crawler_bronze_green_name" {
-  description = "Nome do Crawler Bronze Green Taxi"
-  value       = module.glue.crawler_bronze_green_name
-}
-
 output "glue_crawler_role_arn" {
   description = "ARN da Role do Glue Crawler"
   value       = module.iam.glue_crawler_role_arn

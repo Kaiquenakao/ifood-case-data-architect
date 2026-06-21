@@ -160,9 +160,9 @@ class TestLoad:
         mock_writer.mode.return_value = mock_writer
         mock_writer.partitionBy.return_value = mock_writer
 
-        with patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)), \
-             patch.object(spark, "sql"):
-            mod.load(df, spark)
+        with patch("boto3.client"), \
+             patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)):
+            mod.load(df)
 
         mock_writer.mode.assert_called_once_with("overwrite")
         mock_writer.partitionBy.assert_called_once_with("partition_year", "partition_month")
@@ -180,9 +180,9 @@ class TestLoad:
         mock_writer.partitionBy.return_value = mock_writer
         mock_writer.parquet.side_effect = fake_parquet
 
-        with patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)), \
-             patch.object(spark, "sql"):
-            mod.load(df, spark)
+        with patch("boto3.client"), \
+             patch.object(df.__class__, "coalesce", return_value=MagicMock(write=mock_writer)):
+            mod.load(df)
 
         assert "table_all_taxi_gold" in captured_path.get("path", "")
         assert "gold" in captured_path.get("path", "")

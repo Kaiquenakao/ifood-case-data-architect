@@ -34,7 +34,7 @@ variable "glue_database_gold" {
 }
 
 variable "crawler_role_arn" {
-  description = "ARN da Role do Glue Crawler"
+  description = "ARN da Role do Glue Crawler e Jobs"
   type        = string
 }
 
