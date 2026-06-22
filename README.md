@@ -4,7 +4,26 @@ Pipeline de dados end-to-end para ingestão, transformação e análise das corr
 
 ---
 
+## Solução
+
+Este repositório implementa uma solução completa para o case técnico iFood, atendendo todos os requisitos propostos:
+
+| Requisito | Solução |
+|---|---|
+| Ingestão no Data Lake | AWS Glue Jobs (PySpark) — Bronze → Silver → Gold |
+| PySpark em alguma etapa | Silver e Gold inteiramente em PySpark |
+| Disponibilizar para usuários finais | Amazon Athena via Glue Data Catalog |
+| Colunas obrigatórias presentes | Garantidas no schema Silver e Gold |
+| Modelagem das tabelas | 7 tabelas modeladas via Terraform no Glue Catalog |
+| Respostas às perguntas | `table_avg_total_amount_gold` e `table_avg_passengers_gold` |
+
+> A solução foi implementada na AWS em vez do Databricks Community Edition — 100% nativo no ecossistema AWS (Glue + S3 + Athena + Step Functions). O AWS Glue oferece integração nativa com o Glue Data Catalog, eliminando configuração manual de metastore, enquanto o Databricks Community Edition não suporta orquestração, não persiste clusters e tem recursos computacionais limitados. A infraestrutura é totalmente reproduzível via `terraform apply` e o código validado continuamente via CI com GitHub Actions.
+
+---
+
 ## Arquitetura
+
+![Arquitetura Medallion](doc/arquitetura.png)
 
 ```
 NYC TLC (fonte)
@@ -23,84 +42,67 @@ Athena     ← consulta SQL para usuários finais
 - **Processamento:** AWS Glue Jobs (PySpark)
 - **Catálogo:** AWS Glue Data Catalog
 - **Consulta:** Amazon Athena
+- **Orquestração:** AWS Step Functions
 - **Infraestrutura:** Terraform
+- **CI:** GitHub Actions
 
 ---
 
-## Arquitetura Medallion
+## Por que arquitetura Medallion?
 
-![Arquitetura Medallion](doc/arquitetura.png)
+A arquitetura Medallion organiza os dados em camadas progressivas de qualidade, cada uma com um propósito claro:
 
-### Bronze — `ifood_case_bronze`
+**Bronze — dados brutos**
+Preserva os dados exatamente como vieram da fonte, sem transformações. Garante rastreabilidade total e permite reprocessamento a qualquer momento caso regras de negócio mudem.
 
-| Tabela | Descrição |
-|---|---|
-| `table_yellow_taxi_bronze` | Dados brutos Yellow Taxi — Jan a Mai 2023 |
-| `table_green_taxi_bronze` | Dados brutos Green Taxi — Jan a Mai 2023 |
+**Silver — dados confiáveis**
+Schema padronizado, tipos corretos e nulos removidos. Essa camada é a fonte de verdade para qualquer análise — todos os consumidores partem daqui com a mesma base.
 
-**Schema (colunas principais):**
-
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| `vendorid` | bigint | ID do fornecedor |
-| `passenger_count` | double | Número de passageiros |
-| `total_amount` | double | Valor total da corrida em USD |
-| `tpep_pickup_datetime` | timestamp | Início da corrida (Yellow) |
-| `lpep_pickup_datetime` | timestamp | Início da corrida (Green) |
-| `partition_year` | string | Partição — ano |
-| `partition_month` | string | Partição — mês |
+**Gold — dados prontos para consumo**
+Tabelas pré-agregadas e otimizadas para responder perguntas de negócio específicas com alta performance no Athena, sem necessidade de joins ou agregações custosas em tempo de consulta.
 
 ---
 
-### Silver — `ifood_case_silver`
+## Modelagem de Dados
 
-| Tabela | Descrição |
-|---|---|
-| `table_yellow_taxi_silver` | Dados transformados Yellow Taxi |
-| `table_green_taxi_silver` | Dados transformados Green Taxi |
+Os schemas completos de todas as tabelas estão documentados em [infra/glue/catalog/README.md](infra/glue/catalog/README.md).
 
-**Schema:**
-
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| `vendor_id` | int | ID do fornecedor |
-| `passenger_count` | int | Número de passageiros |
-| `total_amount` | double | Valor total da corrida em USD |
-| `pickup_datetime` | timestamp | Início da corrida |
-| `dropoff_datetime` | timestamp | Fim da corrida |
-| `taxi_type` | string | Tipo do táxi — `yellow` ou `green` |
-| `partition_year` | int | Partição — ano |
-| `partition_month` | int | Partição — mês |
+A referência operacional dos Glue Jobs com tempos de execução está em [infra/glue/jobs/README.md](infra/glue/jobs/README.md).
 
 ---
 
-### Gold — `ifood_case_gold`
+## Orquestração — Step Functions
 
-| Tabela | Descrição |
-|---|---|
-| `table_all_taxi_gold` | Dados consolidados Yellow + Green com filtros de negócio |
-| `table_avg_total_amount_gold` | Resposta Query 1 — média de `total_amount` por mês |
-| `table_avg_passengers_gold` | Resposta Query 2 — média de `passenger_count` por hora em maio |
+O pipeline é orquestrado pela AWS Step Functions com execução paralela por camada e retry automático com backoff exponencial em caso de falha.
 
-**Schema `table_all_taxi_gold`:**
+![Step Functions](doc/stepfunction.png)
 
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| `VendorID` | int | ID do fornecedor |
-| `passenger_count` | int | Número de passageiros (entre 1 e 6) |
-| `total_amount` | double | Valor total da corrida em USD (> 0) |
-| `tpep_pickup_datetime` | timestamp | Início da corrida |
-| `tpep_dropoff_datetime` | timestamp | Fim da corrida |
-| `taxi_type` | string | Tipo do táxi — `yellow` ou `green` |
-| `partition_year` | int | Partição — ano |
-| `partition_month` | int | Partição — mês |
+**Fluxo de execução:**
+
+```
+1. Bronze (paralelo)   — Yellow e Green simultaneamente
+2. Crawler Bronze      — registra partições no Glue Catalog
+3. Silver (paralelo)   — Yellow e Green simultaneamente
+4. Gold All Taxi       — consolida Yellow + Green
+5. Gold Agregações     — Avg Total Amount e Avg Passengers simultaneamente
+```
+
+**Resiliência:**
+- Retry automático: até 3 tentativas com backoff exponencial (30s → 60s → 120s)
+- Catch de erros por camada: se falhar após todos os retries, a Step Function marca a etapa com erro e interrompe o pipeline
 
 ---
 
-### Catálogo de Dados e Metadados
+## CI — GitHub Actions
 
-Todos os metadados, definições de schemas e partições das tabelas descritas acima estão centralizados no **AWS Glue Data Catalog**. 
-![Glue Data Catalog](doc/glue_data_catalog.png)
+Testes automatizados rodam a cada push e pull request nas branches `main` e `develop`.
+
+![GitHub Actions](doc/tests_action.png)
+
+**78 testes cobrindo:**
+- Extract — download HTTP e tratamento de erros
+- Transform — schema, tipos, nulos e filtros de qualidade
+- Load — paths S3 e configurações de escrita Parquet
 
 ---
 
@@ -130,23 +132,11 @@ aws configure
 
 ### 3. Configure o `terraform.tfvars`
 
-Crie o arquivo `infra/terraform.tfvars` com as seguintes variáveis:
+Crie o arquivo `infra/terraform.tfvars`:
 
 ```hcl
-# ─── Configurações do usuário ───────────────────────────────────
-# aws_region  → região onde os recursos serão criados
-#               exemplo: "us-east-1", "sa-east-1", "eu-west-1"
-# bucket_name → nome único global do bucket S3
-#               deve ser único em toda a AWS — use um nome personalizado
-aws_region  = "sua-regiao"
-bucket_name = "seu-bucket-unico"
-
-# ─── Não alterar ────────────────────────────────────────────────
-glue_database_bronze = "ifood_case_bronze"
-glue_database_silver = "ifood_case_silver"
-glue_database_gold   = "ifood_case_gold"
-project_name         = "ifood-case"
-environment          = "prod"
+aws_region  = "sua-regiao"   # exemplo: "us-east-1", "sa-east-1", "eu-west-1"
+bucket_name = "seu-bucket"   # deve ser único globalmente na AWS
 ```
 
 > **Atenção:** o `bucket_name` deve ser único globalmente na AWS. Use um nome personalizado como `ifood-case-data-lake-seu-nome`.
@@ -160,106 +150,42 @@ terraform plan
 terraform apply
 ```
 
-O Terraform vai provisionar automaticamente:
+O Terraform provisiona automaticamente:
 - Bucket S3 com estrutura Bronze/Silver/Gold
 - Upload dos scripts ETL para o S3
-- Glue Jobs (Bronze, Silver e Gold)
+- Glue Jobs por camada (Bronze, Silver e Gold)
 - Glue Crawlers Bronze
 - Glue Data Catalog (databases e tabelas)
 - IAM Role com permissões necessárias
+- Step Function com retry e catch de erros
 
----
+### 5. Execute o pipeline
 
-## Execução do Pipeline
-
-> **Importante:** siga a ordem abaixo rigorosamente. Cada etapa depende da anterior.
-
-### Etapa 1 — ETL Bronze
-
-```
-AWS Console → Glue → Jobs → ifood-case-prod-etl-bronze → Run
-```
-
-![MSCK](doc/run_pipe.png)
-
-Aguarde o job finalizar com sucesso (~15 min).
-
-![Sucesso](doc/pipe_sucesso.png)
-
-Após o job finalizar, execute os Crawlers para registrar as tabelas no Glue Catalog:
+Após o `terraform apply`, dispare a Step Function:
 
 ```bash
-aws glue start-crawler --name ifood-case-prod-crawler-bronze-yellow-taxi --region sua-regiao
-aws glue start-crawler --name ifood-case-prod-crawler-bronze-green-taxi --region sua-regiao
+aws stepfunctions start-execution \
+  --state-machine-arn $(terraform output -raw stepfunction_arn) \
+  --name "execucao-inicial" \
+  --region sua-regiao
 ```
 
-![Crawler](doc/crawler.png)
-
-Aguarde os Crawlers finalizarem e registre as partições no Athena. Registre as partições no Athena — execute **uma query por vez**:
-
-```sql
-MSCK REPAIR TABLE ifood_case_bronze.table_yellow_taxi_bronze;
-```
-
-```sql
-MSCK REPAIR TABLE ifood_case_bronze.table_green_taxi_bronze;
-```
-
-![MSCK](doc/msck.png)
----
-
-### Etapa 2 — ETL Silver
+Ou pelo console AWS:
 
 ```
-AWS Console → Glue → Jobs → ifood-case-prod-etl-silver → Run
+AWS Console → Step Functions → ifood-case-prod-pipeline-nyc-tlc → Start execution
 ```
+![Start Step Function](doc/stepf.png)
 
-Aguarde o job finalizar com sucesso.
+Aguarde ~10-12 minutos. Ao finalizar com sucesso:
 
-Registre as partições no Athena:
-
-```sql
-MSCK REPAIR TABLE ifood_case_silver.table_yellow_taxi_silver;
-MSCK REPAIR TABLE ifood_case_silver.table_green_taxi_silver;
-```
-
----
-
-### Etapa 3 — ETL Gold
-
-```
-AWS Console → Glue → Jobs → ifood-case-prod-etl-gold → Run
-```
-
-Aguarde o job finalizar com sucesso.
-
-Registre as partições no Athena:
-
-```sql
-MSCK REPAIR TABLE ifood_case_gold.table_all_taxi_gold;
-MSCK REPAIR TABLE ifood_case_gold.table_avg_passengers_gold;
-MSCK REPAIR TABLE ifood_case_gold.table_avg_total_amount_gold;
-```
+![Pipeline Concluído](doc/pipe_sucesso_step.png)
 
 ---
 
 ## Consultas
 
-Com o pipeline completo, execute as queries no Athena ou via `analysis/queries.ipynb`:
-
-**Query 1 — Média de total_amount por mês (Yellow Taxi):**
-```sql
-SELECT mes, avg_total_amount
-FROM ifood_case_gold.table_avg_total_amount_gold
-ORDER BY mes;
-```
-
-**Query 2 — Média de passenger_count por hora em maio (todos os táxis):**
-```sql
-SELECT hora, avg_passenger_count
-FROM ifood_case_gold.table_avg_passengers_gold
-ORDER BY hora;
-```
+As queries e instruções de como executar no Athena estão em [analysis/README.md](analysis/README.md).
 
 ---
 
@@ -267,25 +193,45 @@ ORDER BY hora;
 
 ```
 ifood-case-data-architect/
-├── src/
-│   ├── etl_bronze.py          # Ingestão Bronze — NYC TLC → S3
-│   ├── etl_silver.py          # Transformação Silver — Bronze → S3
-│   └── etl_gold.py            # Agregação Gold — Silver → S3
-├── analysis/
-│   ├── queries.sql            # Queries SQL das perguntas do case
-│   └── queries.ipynb          # Notebook com resultado das queries
-├── exploratory/
-│   ├── exploratory_source.ipynb
-│   ├── exploratory_bronze.ipynb
-│   ├── exploratory_silver.ipynb
-│   └── exploratory_gold.ipynb
-├── infra/
-│   ├── terraform.tfvars       # Configurações do ambiente (não versionado)
-│   ├── s3/                    # Bucket S3 + upload dos scripts
-│   ├── iam/                   # Role e policies
-│   └── glue/                  # Jobs, Crawlers e Catalog
-├── README.md
-└── requirements.txt
+├── src/                                   # Scripts ETL por camada
+│   ├── bronze/                            # Ingestão — NYC TLC → S3
+│   │   ├── etl_yellow_taxi_bronze.py
+│   │   └── etl_green_taxi_bronze.py
+│   ├── silver/                            # Transformação — Bronze → S3
+│   │   ├── etl_yellow_taxi_silver.py
+│   │   └── etl_green_taxi_silver.py
+│   └── gold/                              # Agregação — Silver → S3
+│       ├── etl_all_taxi_gold.py           # Consolida Yellow + Green
+│       ├── etl_avg_total_amount_gold.py   # Média total_amount por mês
+│       └── etl_avg_passengers_gold.py     # Média passageiros por hora
+├── tests/                                 # 78 testes pytest por camada
+│   ├── bronze/
+│   ├── silver/
+│   ├── gold/
+│   ├── awsglue/                           # Mocks do AWS Glue
+│   └── requirements-test.txt             # Dependências de teste
+├── infra/                                 # Infraestrutura Terraform
+│   ├── terraform.tfvars                   # Configurações do ambiente
+│   ├── s3/                                # Bucket S3 + upload dos scripts
+│   ├── iam/                               # Role e policies
+│   ├── glue/
+│   │   ├── jobs/                          # Um .tf por Glue Job — ver README
+│   │   │   ├── bronze/
+│   │   │   ├── silver/
+│   │   │   └── gold/
+│   │   └── catalog/                       # Modelagem das tabelas — ver README
+│   │       ├── bronze/                    # Crawlers Bronze
+│   │       ├── silver/                    # Tabelas Silver
+│   │       └── gold/                      # Tabelas Gold
+│   └── stepfunction/                      # Step Function + IAM + CloudWatch
+├── analysis/                              # Consultas e resultados — ver README
+│   ├── queries.sql
+│   └── queries.ipynb
+├── doc/                                   # Imagens da documentação
+├── .github/
+│   └── workflows/
+│       └── pipeline.yml                   # CI — testes em push e PR
+└── README.md
 ```
 
 ---
