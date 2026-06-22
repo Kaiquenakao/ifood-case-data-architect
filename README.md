@@ -21,10 +21,13 @@ Este repositório implementa uma solução completa para o case técnico iFood, 
 
 ---
 
-## Arquitetura
+## Arquitetura Medallion
 
 ![Arquitetura Medallion](doc/arquitetura.png)
 
+## Arquitetura de Componentes
+
+![Arquitetura de Componentes](doc/arquitetura_componentes.png)
 ```
 NYC TLC (fonte)
         ↓
